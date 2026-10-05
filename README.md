@@ -154,6 +154,25 @@ python main.py backtest --csv EURUSD_M15.csv --tz UTC         # desde un CSV en 
 
 Formatos aceptados con `--csv`: columnas `time` (o `datetime`, `date`, `timestamp`) + `open, high, low, close`; el export de MetaTrader (`<DATE> <TIME> <OPEN> ...`); y el CSV que genera `--export-csv`. Los datos de menor temporalidad (1m, 5m) se agregan a 15m. `--tz` indica la zona horaria de las fechas si no la incluyen (un export manual de MT5 está en hora del servidor: p.ej. `--tz Europe/Athens`).
 
+## Estrategia Chartz (curso chart.wzrd) y comparativa
+
+`detector/chartz.py` implementa, como estrategia aparte, el modelo del curso: estructura HTF con BOS/CDC y Trading Range, POI (order block con barrido de liquidez, BOS, ineficiencia y sin mitigar) en descuento/premium del TR y a favor de la tendencia, IRL formada y barrida antes del toque, y entrada con confirmación (barrido + CDC en LTF) dentro de las killzones de Londres y Nueva York. Se configura en la sección `chartz` de `config.yaml` (combo `scalping` M15/M5/M1 o `intradia` 1H/M15/M5). Las alertas en vivo siguen siendo las de PDH/PDL.
+
+```powershell
+python main.py compare                                  # 2024-01-01 -> 2026-01-01, velas M1 de MT5
+python main.py compare --from 2025-01-01 --to 2025-07-01 --spread 0.5
+```
+
+Descarga M1 de MT5, saca las alertas de PDH/PDL (M15) y las señales Chartz, y simula las dos con las mismas reglas (`backtest/trades.py`): orden límite que se cancela si el precio toca el TP antes o al cerrar el día de trading, TP a 1R/2R/3R (y al weak high/low del TR para Chartz), y si SL y TP caen en la misma vela M1 cuenta como pérdida. Escribe `backtest/compare.csv` y las operaciones a 2R en `backtest/trades_2R_*.csv`.
+
+## Daily Cycle en GBPUSD (dry run)
+
+Con `daily_cycle.enabled: true` en `config.yaml`, cada pasada de `run`/`once` también busca la estrategia Daily Cycle (`detector/daily_cycle.py`) en GBPUSD: sesgo del TR de 4H, sweep + CHoCH de una sola vela con FVG en M15 durante la killzone de Londres (02:00–05:00 NY), entrada límite al 50% del FVG, SL en el extremo del sweep y TP a `tp_r`. Va en paralelo a EURUSD con su propia fuente y su propio estado; si falla, no afecta a las alertas de EURUSD.
+
+Con `dry_run: true` no se envía email: la señal se escribe en el log (`ALERTA (dry run)`) y en el diario `state/daily_cycle_gbpusd.json` (todas las señales detectadas, avisadas o no). En GitHub Actions ese fichero se guarda en la caché junto a `state/state.json`. Para recibir emails, `dry_run: false`.
+
+El backtest se hizo con velas de MT5; con Yahoo (GitHub Actions) las velas difieren algo y pueden salir señales distintas.
+
 ## Despliegue
 
 Elige **una** de las dos formas: un proceso permanente (`run`) o una ejecución por minuto (`once`). `once` sale enseguida si no ha cerrado una vela nueva, así que ejecutarlo cada minuto es barato.

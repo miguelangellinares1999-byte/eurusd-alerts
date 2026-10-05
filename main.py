@@ -5,6 +5,7 @@ Uso:
     python main.py once                    # un ciclo y sale (para cron / Task Scheduler)
     python main.py backtest [--months 12] [--export-csv velas.csv]   # histórico de MT5
     python main.py backtest --csv datos.csv [--out alerts.csv] [--tz UTC]
+    python main.py compare [--from 2024-01-01 --to 2026-01-01]       # PDH/PDL vs Chartz (M1 de MT5)
     python main.py test-email              # envía un email de prueba
 """
 
@@ -123,27 +124,47 @@ def build_notifier(cfg: AppConfig) -> Notifier:
 
 # --------------------------------------------------------------------- comandos
 def cmd_live(cfg: AppConfig, loop: bool) -> int:
+    from daily_cycle_alerts import SignalStore, run_daily_cycle
     from data import create_source
 
     notifier = build_notifier(cfg)
     source = create_source(cfg)
     store = StateStore(cfg.state_path).load()
+    dc = cfg.daily_cycle
+    dc_source = dc_store = dc_notifier = None
+    if dc.enabled:
+        dc_source = create_source(cfg, dc.symbol, dc.mt5_symbol, dc.yahoo_ticker)
+        dc_store = SignalStore(dc.state_path).load()
+        dc_notifier = LogNotifier() if dc.dry_run else notifier
+    dc_done: pd.Timestamp | None = None
     log.info(
-        "Arrancando (%s, fuente=%s, estado=%s)",
+        "Arrancando (%s, fuente=%s, estado=%s%s)",
         "bucle" if loop else "una pasada", cfg.data_source.type, cfg.state_path,
+        f", Daily Cycle {dc.symbol}{' dry run' if dc.dry_run else ''}" if dc.enabled else "",
     )
     try:
         while True:
+            failed = False
             try:
                 sent = run_cycle(cfg, source, store, notifier)
                 if sent:
                     log.info("%d alerta(s) enviada(s)", sent)
             except Exception:
                 log.exception("Error en el ciclo")
-                if not loop:
-                    return 1
+                failed = True
+            # Daily Cycle: independiente de EURUSD; una pasada por vela de 15m cerrada.
+            now = pd.Timestamp.now(tz="UTC")
+            candle = latest_closed_open(now - timedelta(seconds=cfg.candle_close_delay_seconds), dc.detector.ltf_minutes)
+            if dc.enabled and candle != dc_done and not market_closed(candle):
+                try:
+                    n = run_daily_cycle(dc, dc_source, dc_store, dc_notifier, cfg.max_alert_age_minutes, now)
+                    if n:
+                        log.info("%d señal(es) Daily Cycle %s", n, dc.symbol)
+                    dc_done = candle
+                except Exception:
+                    log.exception("Error en el ciclo Daily Cycle %s", dc.symbol)
             if not loop:
-                return 0
+                return 1 if failed else 0
             # Dormir hasta el siguiente minuto (+ margen de cierre de vela).
             now = time.time()
             interval = cfg.loop_interval_seconds
@@ -154,15 +175,18 @@ def cmd_live(cfg: AppConfig, loop: bool) -> int:
         return 0
     finally:
         source.close()
+        if dc_source is not None:
+            dc_source.close()
 
 
-def download_history(cfg: AppConfig, date_from, date_to, source=None) -> pd.DataFrame:
-    """Velas M15 de MT5 con copy_rates_range (formato CANDLE_COLUMNS, sin validar)."""
+def download_history(cfg: AppConfig, date_from, date_to, source=None, timeframe: int | None = None) -> pd.DataFrame:
+    """Velas de MT5 con copy_rates_range (M15 por defecto; formato CANDLE_COLUMNS, sin validar)."""
     from data import create_source
 
     source = source or create_source(cfg)
     try:
-        return source.get_range(cfg.data_source.mt5_symbol, cfg.detector.timeframe_minutes, date_from, date_to)
+        tf = timeframe or cfg.detector.timeframe_minutes
+        return source.get_range(cfg.data_source.mt5_symbol, tf, date_from, date_to)
     finally:
         source.close()
 
@@ -214,6 +238,36 @@ def cmd_backtest(
     return 0
 
 
+def cmd_compare(
+    cfg: AppConfig,
+    date_from: str,
+    date_to: str,
+    spread: float = 0.0,
+    out_dir: str = "backtest",
+    source=None,
+) -> int:
+    """Backtest de PDH/PDL y Chartz sobre M1 de MT5 con las mismas reglas de ejecución."""
+    from backtest.compare import compare
+    from data import to_engine_frame, validate_candles
+
+    start, end = pd.Timestamp(date_from, tz="UTC"), pd.Timestamp(date_to, tz="UTC")
+    warmup = start - pd.Timedelta(days=45)  # estructura HTF y PDH/PDL previos al inicio
+    log.info("Descargando %s M1 de MT5: %s -> %s", cfg.data_source.mt5_symbol, warmup, end)
+    raw = download_history(cfg, warmup.to_pydatetime(), end.to_pydatetime(), source, timeframe=1)
+    candles, report = validate_candles(raw, 1)
+    print(report.summary())
+    table, trades = compare(to_engine_frame(candles), start, end, cfg.detector, cfg.chartz, spread)
+    with pd.option_context("display.width", 250, "display.max_columns", 30):
+        print(table.round(2).to_string(index=False))
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    table.to_csv(Path(out_dir) / "compare.csv", index=False)
+    for name, rows in trades.items():
+        path = Path(out_dir) / f"trades_2R_{name.replace('/', '').lower()}.csv"
+        pd.DataFrame([t.__dict__ | {"r": t.r} for t in rows]).to_csv(path, index=False)
+    print(f"\nResultados en {Path(out_dir) / 'compare.csv'} y trades_2R_*.csv")
+    return 0
+
+
 def cmd_test_email(cfg: AppConfig) -> int:
     build_notifier(cfg).send(f"[{cfg.symbol}] Email de prueba", "Si lees esto, la configuración SMTP funciona.")
     log.info("Email de prueba enviado")
@@ -235,6 +289,11 @@ def main(argv: list[str] | None = None) -> int:
     bt.add_argument("--out", default="backtest/alerts.csv", help="CSV de alertas")
     bt.add_argument("--export-csv", help="guarda también las velas descargadas (para compararlas con TradingView)")
     bt.add_argument("--strict-gaps", action="store_true", help="falla si hay huecos lunes-viernes")
+    cp = sub.add_parser("compare", help="backtest PDH/PDL vs Chartz con velas M1 de MT5")
+    cp.add_argument("--from", dest="date_from", default="2024-01-01", help="inicio UTC (YYYY-MM-DD)")
+    cp.add_argument("--to", dest="date_to", default="2026-01-01", help="fin UTC, exclusivo (YYYY-MM-DD)")
+    cp.add_argument("--spread", type=float, default=0.0, help="spread + comisión en pips")
+    cp.add_argument("--out-dir", default="backtest", help="carpeta de los CSV de resultados")
     sub.add_parser("test-email", help="envía un email de prueba")
     args = parser.parse_args(argv)
 
@@ -253,6 +312,15 @@ def main(argv: list[str] | None = None) -> int:
                 cfg, args.out, args.csv, args.tz, args.months, args.date_from, args.date_to,
                 args.export_csv, args.strict_gaps,
             )
+        except (MT5Error, CandleValidationError) as exc:
+            log.error("%s", exc)
+            return 1
+    if args.command == "compare":
+        from data import CandleValidationError
+        from data.mt5_source import MT5Error
+
+        try:
+            return cmd_compare(cfg, args.date_from, args.date_to, args.spread, args.out_dir)
         except (MT5Error, CandleValidationError) as exc:
             log.error("%s", exc)
             return 1

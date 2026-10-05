@@ -10,6 +10,9 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
+from daily_cycle_alerts import DailyCycleAlerts
+from detector.chartz import ChartzConfig
+from detector.daily_cycle import DailyCycleConfig
 from detector.config import DetectorConfig, SessionWindow
 
 ROOT = Path(__file__).resolve().parent
@@ -51,6 +54,8 @@ class AppConfig:
     log_level: str
     log_max_bytes: int
     log_backup_count: int
+    chartz: ChartzConfig = field(default_factory=ChartzConfig)
+    daily_cycle: DailyCycleAlerts = field(default_factory=DailyCycleAlerts)
 
 
 def _parse_time(value: str) -> time:
@@ -71,6 +76,51 @@ def _sessions(raw: dict) -> list[SessionWindow]:
         d = definitions[name]
         windows.append(SessionWindow(name, d["timezone"], _parse_time(d["start"]), _parse_time(d["end"])))
     return windows
+
+
+# Combos de temporalidades del curso (pág. 72): estructura / POI / CDC en minutos.
+CHARTZ_COMBOS = {
+    "intradia": dict(htf_minutes=60, poi_minutes=15, ltf_minutes=5),
+    "scalping": dict(htf_minutes=15, poi_minutes=5, ltf_minutes=1, max_poi_age_hours=24, max_cdc_hours=2),
+}
+
+
+def _chartz(raw: dict, pip_size: float) -> ChartzConfig:
+    combo = raw.get("combo", "scalping")
+    if combo not in CHARTZ_COMBOS:
+        raise ValueError(f"chartz.combo debe ser uno de {list(CHARTZ_COMBOS)}")
+    kwargs = dict(CHARTZ_COMBOS[combo])
+    for key in ("entry", "require_fvg", "require_liquidity_grab", "require_irl", "min_risk_pips"):
+        if key in raw:
+            kwargs[key] = raw[key]
+    if raw.get("killzones") is not None:
+        kwargs["killzones"] = _sessions({"enabled": True, **raw["killzones"]}) if raw["killzones"].get("enabled", True) else []
+    return ChartzConfig(pip_size=pip_size, **kwargs)
+
+
+def _daily_cycle(raw: dict) -> DailyCycleAlerts:
+    if not raw:
+        return DailyCycleAlerts()
+    det = DailyCycleConfig(
+        ltf_minutes=15,
+        htf_minutes=int(raw.get("bias_minutes", 240)),
+        single_candle_inf=True,
+        entry="fvg_mid",
+        windows=[tuple(w) for w in raw.get("windows", [[2, 5]])],
+        min_risk_pips=float(raw.get("min_risk_pips", 1.5)),
+        pip_size=float(raw.get("pip_size", 0.0001)),
+    )
+    return DailyCycleAlerts(
+        enabled=bool(raw.get("enabled", False)),
+        dry_run=bool(raw.get("dry_run", True)),
+        symbol=str(raw.get("symbol", "GBPUSD")),
+        mt5_symbol=str(raw.get("mt5_symbol", raw.get("symbol", "GBPUSD"))),
+        yahoo_ticker=str(raw.get("yahoo_ticker", f"{raw.get('symbol', 'GBPUSD')}=X")),
+        lookback_days=int(raw.get("lookback_days", 40)),
+        tp_r=float(raw.get("tp_r", 2)),
+        state_path=_path(raw.get("state_path", "state/daily_cycle_gbpusd.json")),
+        detector=det,
+    )
 
 
 def _path(value: str) -> Path:
@@ -139,4 +189,6 @@ def load_config(path: str | Path = ROOT / "config.yaml", env_file: str | Path | 
         log_level=logging_cfg.get("level", "INFO"),
         log_max_bytes=int(logging_cfg.get("max_bytes", 5_000_000)),
         log_backup_count=int(logging_cfg.get("backup_count", 5)),
+        chartz=_chartz(raw.get("chartz", {}) or {}, detector.pip_size),
+        daily_cycle=_daily_cycle(raw.get("daily_cycle", {}) or {}),
     )

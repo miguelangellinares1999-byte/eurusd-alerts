@@ -40,6 +40,37 @@ session_filter:
     london:  {timezone: Europe/London,    start: "07:00", end: "16:00"}
     newyork: {timezone: America/New_York, start: "08:00", end: "17:00"}
 
+# Estrategia del curso chart.wzrd (detector/chartz.py). De momento solo se usa en
+# `python main.py compare`; las alertas en vivo siguen siendo las de PDH/PDL.
+chartz:
+  combo: scalping          # scalping = estructura M15, POI M5, CDC M1 | intradia = 1H, M15, M5
+  entry: close             # close = al cierre de la vela del CDC | open = apertura del OB (entrada 1) | mid = 50% del OB
+  require_fvg: true        # el impulso del OB/CDC debe dejar ineficiencia
+  require_liquidity_grab: true
+  require_irl: true        # IRL formada y barrida antes de tocar el POI
+  min_risk_pips: 1
+  killzones:               # 3 h desde la apertura de Londres y de NY (pág. 51)
+    enabled: true
+    sessions: [london, newyork]
+    definitions:
+      london:  {timezone: Europe/London,    start: "08:00", end: "11:00"}
+      newyork: {timezone: America/New_York, start: "08:00", end: "11:00"}
+
+# Daily Cycle (detector/daily_cycle.py) en vivo para otro par, en paralelo a EURUSD PDH/PDL.
+# M15: sweep + CHoCH de una sola vela con FVG, sesgo del TR de 4H, killzone de Londres.
+daily_cycle:
+  enabled: true
+  dry_run: true            # true = solo log y diario en state_path, sin email
+  symbol: GBPUSD
+  mt5_symbol: GBPUSD
+  yahoo_ticker: "GBPUSD=X"
+  pip_size: 0.0001
+  bias_minutes: 240
+  windows: [[2, 5]]        # horas NY en las que puede darse el CHoCH (killzone de Londres)
+  tp_r: 2
+  lookback_days: 40        # historial M15 por pasada (el TR de 4H necesita semanas)
+  state_path: state/daily_cycle_gbpusd.json
+
 alerts:
   max_alert_age_minutes: 30      # no se envían alertas más antiguas (p.ej. al arrancar)
   dry_run: false                 # true = se escriben en el log en vez de enviarse por email

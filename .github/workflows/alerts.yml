@@ -41,7 +41,9 @@ jobs:
       - name: Restaurar estado
         uses: actions/cache/restore@v4
         with:
-          path: state/state.json
+          path: |
+            state/state.json
+            state/daily_cycle_gbpusd.json
           key: state-${{ github.run_id }}
           restore-keys: state-
 
@@ -52,5 +54,7 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: state/state.json
+          path: |
+            state/state.json
+            state/daily_cycle_gbpusd.json
           key: state-${{ github.run_id }}-${{ github.run_attempt }}
