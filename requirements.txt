@@ -1,0 +1,9 @@
+pandas>=2.1
+numpy>=1.26
+PyYAML>=6.0
+python-dotenv>=1.0
+requests>=2.31
+tzdata>=2024.1
+pytest>=8.0
+# Fuente de datos: MetaTrader 5 (la librería solo existe para Windows)
+MetaTrader5>=5.0.45; sys_platform == "win32"

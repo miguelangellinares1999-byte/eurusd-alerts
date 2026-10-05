@@ -1,0 +1,61 @@
+symbol: EURUSD
+timeframe_minutes: 15
+
+data_source:
+  type: mt5               # única fuente: MetaTrader 5 (solo Windows, terminal abierto y con sesión)
+  lookback_days: 5        # historial descargado en cada ciclo en vivo (debe cubrir el día anterior)
+  mt5:
+    symbol: "EURUSD"      # tal como lo llama tu bróker: EURUSD, EURUSD.r, EURUSDm...
+    # MT5 da las horas en la hora del SERVIDOR del bróker. Desfase fijo servidor - UTC en horas
+    # (p.ej. 2 = GMT+2). OJO: casi todos los brókers cambian de GMT+2 a GMT+3 en verano;
+    # un desfase fijo solo es correcto media temporada -> usa server_timezone para backtests.
+    server_utc_offset_hours: 2
+    # true = al conectar estima el desfase comparando la hora del último tick con la hora UTC
+    # actual (si el mercado está cerrado usa server_utc_offset_hours). Solo vale para el presente.
+    auto_detect_offset: false
+    # Opcional, con horario de verano. Si se define, prevalece sobre las dos opciones anteriores.
+    # "NY+7" = hora de Nueva York + 7 (GMT+2 invierno / GMT+3 verano, la mayoría de brókers),
+    # o un nombre IANA ("Europe/Athens", "UTC"). Ejecuta check_mt5.py para saber cuál necesitas.
+    server_timezone: "NY+7"
+    # Credenciales opcionales en .env: MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH
+  yahoo:                  # type: yahoo (o variable DATA_SOURCE=yahoo, la usa GitHub Actions)
+    ticker: "EURUSD=X"
+
+detector:
+  swing_n: 2                     # velas a cada lado para un pivote
+  max_setup_hours: 8             # se descarta el setup si no se completa en X horas desde el sweep
+  fvg_max_bars_after_choch: 1    # velas tras el CHoCH en las que aún puede cerrarse el FVG
+  min_fvg_pips: 0                # tamaño mínimo del FVG
+  pip_size: 0.0001
+  one_alert_per_level_per_day: true
+
+trading_day:
+  close_hour: 17                 # el día cierra a las 17:00...
+  timezone: America/New_York     # ...hora de Nueva York
+
+session_filter:
+  enabled: false                 # true = solo se aceptan sweeps dentro de las sesiones listadas
+  sessions: [london, newyork]
+  definitions:                   # horas SIEMPRE entre comillas
+    london:  {timezone: Europe/London,    start: "07:00", end: "16:00"}
+    newyork: {timezone: America/New_York, start: "08:00", end: "17:00"}
+
+alerts:
+  max_alert_age_minutes: 30      # no se envían alertas más antiguas (p.ej. al arrancar)
+  dry_run: false                 # true = se escriben en el log en vez de enviarse por email
+  smtp_host: smtp.gmail.com
+  smtp_port: 465
+
+state:
+  path: state/state.json
+  keep_days: 30                  # setups finalizados más antiguos se purgan
+
+loop:
+  interval_seconds: 60
+  candle_close_delay_seconds: 10 # margen tras el cierre de la vela para que llegue el dato
+
+logging:
+  file: logs/eurusd_alerts.log
+  level: INFO
+  max_bytes: 5000000
+  backup_count: 5

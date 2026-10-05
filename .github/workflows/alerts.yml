@@ -1,0 +1,56 @@
+name: EURUSD alerts
+
+on:
+  schedule:
+    # Cada 15 min de domingo a viernes (UTC). main.py ignora el fin de semana FX.
+    - cron: "2,17,32,47 * * * 0-5"
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "once = buscar señales, test-email = email de prueba"
+        type: choice
+        options: [once, test-email]
+        default: once
+
+concurrency:
+  group: eurusd-alerts
+  cancel-in-progress: false
+
+jobs:
+  alerts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATA_SOURCE: yahoo
+      # Los cron de GitHub se retrasan a menudo: margen para no descartar alertas.
+      MAX_ALERT_AGE_MINUTES: "90"
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+      ALERT_TO: ${{ secrets.ALERT_TO }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # El estado (setups y última vela procesada) se guarda entre ejecuciones en la caché.
+      - name: Restaurar estado
+        uses: actions/cache/restore@v4
+        with:
+          path: state/state.json
+          key: state-${{ github.run_id }}
+          restore-keys: state-
+
+      - name: Ejecutar
+        run: python main.py ${{ inputs.command || 'once' }}
+
+      - name: Guardar estado
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state/state.json
+          key: state-${{ github.run_id }}-${{ github.run_attempt }}
