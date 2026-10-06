@@ -70,7 +70,7 @@ def pytest_approx(v):
     return pytest.approx(v)
 
 
-def test_config_has_gbpusd_dry_run():
+def test_config_has_gbpusd_live():
     dc = load_config().daily_cycle
-    assert dc.enabled and dc.dry_run and dc.symbol == "GBPUSD"
+    assert dc.enabled and not dc.dry_run and dc.symbol == "GBPUSD"
     assert dc.detector.ltf_minutes == 15 and dc.detector.htf_minutes == 240 and dc.detector.single_candle_inf
