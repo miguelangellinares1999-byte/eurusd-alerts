@@ -72,3 +72,39 @@ class YahooSource(DataSource):
     def get_last(self, symbol: str, timeframe, n: int) -> pd.DataFrame:
         days = max(1, -(-n * int(timeframe) // 1440) + 3)  # + margen para el fin de semana
         return self._fetch(timeframe, {"range": f"{min(days, 59)}d"}).tail(n).reset_index(drop=True)
+
+
+def get_daily_history(ticker: str, start: datetime, end: datetime | None = None, session=None) -> pd.DataFrame:
+    """Velas diarias de Yahoo indexadas por fecha de la bolsa (sin hora), ajustadas por splits.
+
+    Para acciones, cripto, índices... (backtest semanal). La vela del día en curso se descarta.
+    """
+    http = session or requests.Session()
+    end = pd.Timestamp.now(tz="UTC") if end is None else pd.Timestamp(end)
+    resp = http.get(
+        URL.format(ticker=ticker),
+        params={
+            "interval": "1d",
+            "period1": int(pd.Timestamp(start).timestamp()),
+            "period2": int(end.timestamp()),
+            "events": "split",
+        },
+        headers=HEADERS,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    chart = resp.json().get("chart", {})
+    if chart.get("error") or not chart.get("result"):
+        raise YahooError(f"Yahoo no devolvió velas de {ticker}: {chart.get('error')}")
+    res = chart["result"][0]
+    if not res.get("timestamp"):
+        return pd.DataFrame(columns=["open", "high", "low", "close"], dtype=float)
+    tz = res.get("meta", {}).get("exchangeTimezoneName") or "UTC"
+    q = res["indicators"]["quote"][0]
+    days = pd.to_datetime(res["timestamp"], unit="s", utc=True).tz_convert(tz).tz_localize(None).normalize()
+    out = pd.DataFrame({k: q[k] for k in ("open", "high", "low", "close")}, index=days).dropna().astype(float)
+    out = out[~out.index.duplicated(keep="last")].sort_index()
+    out["high"] = out[["open", "high", "low", "close"]].max(axis=1)
+    out["low"] = out[["open", "high", "low", "close"]].min(axis=1)
+    today = end.tz_convert(tz).tz_localize(None).normalize()
+    return out[out.index < today].rename_axis("date")

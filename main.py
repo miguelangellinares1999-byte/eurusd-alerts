@@ -6,6 +6,9 @@ Uso:
     python main.py backtest [--months 12] [--export-csv velas.csv]   # histórico de MT5
     python main.py backtest --csv datos.csv [--out alerts.csv] [--tz UTC]
     python main.py compare [--from 2024-01-01 --to 2026-01-01]       # PDH/PDL vs Chartz (M1 de MT5)
+    python main.py weekly [--from 2010-01-01] [--cost 0.1] [--tickers AAPL BTC-USD]  # acciones/cripto semanal
+    python main.py confluence              # barridas + índices/amplitud/VIX/MOVE en el S&P 500 y SMT
+    python main.py indices [--risk 2]      # S&P 500 y Nasdaq 100: salidas, rotación y riesgo (1990+)
     python main.py test-email              # envía un email de prueba
 """
 
@@ -268,6 +271,132 @@ def cmd_compare(
     return 0
 
 
+def cmd_weekly(
+    date_from: str,
+    tickers: list[str] | None = None,
+    cost_pct: float = 0.1,
+    out_dir: str = "backtest",
+    session=None,
+) -> int:
+    """Backtest semanal (barrida del mínimo semanal anterior) en acciones y cripto con datos de Yahoo."""
+    from backtest.weekly import BENCHMARK, UNIVERSE, run_weekly
+    from data.yahoo_source import get_daily_history
+
+    start = pd.Timestamp(date_from, tz="UTC")
+    data = {}
+    for ticker in tickers or UNIVERSE:
+        try:
+            data[ticker] = get_daily_history(ticker, start, session=session)
+        except Exception as exc:  # un ticker caído no debe parar el resto
+            log.warning("Sin datos de %s: %s", ticker, exc)
+    bench = get_daily_history(BENCHMARK, start, session=session)
+    result = run_weekly(data, bench, cost=cost_pct / 100)
+
+    print(f"Periodo {result.start.date()} -> {result.end.date()}, {len(result.per_ticker)} activos, "
+          f"coste ida y vuelta {cost_pct}%\n")
+    with pd.option_context("display.width", 250, "display.max_columns", 30, "display.max_rows", 200):
+        print(result.per_ticker.round(2).to_string(index=False))
+        print("\nPor año (operaciones cerradas):")
+        print(result.by_year.round(2).to_string(index=False))
+        print("\nCartera:")
+        print(result.portfolio.round(1).to_string(index=False))
+    print("\nOJO: el universo son las grandes empresas de HOY (sesgo de supervivencia): infla tanto "
+          "la estrategia como el comprar y mantener.")
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    result.per_ticker.to_csv(Path(out_dir) / "weekly_summary.csv", index=False)
+    result.trades_frame().to_csv(Path(out_dir) / "weekly_trades.csv", index=False)
+    print(f"Resultados en {Path(out_dir) / 'weekly_summary.csv'} y weekly_trades.csv")
+    return 0
+
+
+def cmd_confluence(date_from: str = "2010-01-01") -> int:
+    """Barridas de acumulación en el S&P 500 añadiendo filtros de mercado uno a uno, y SMT S&P 500 / Nasdaq."""
+    from backtest.confluence import Variant, market_frame, run_variants, smt_trades
+    from backtest.market import breadth, load_daily, sp500_members
+    from backtest.weekly import r_stats
+
+    year0 = pd.Timestamp(date_from).year
+    warmup = f"{year0 - 1}-01-01"  # medias de 50 sesiones y niveles del año anterior
+    stocks = load_daily(list(sp500_members().ticker), warmup)
+    idx = load_daily(["^GSPC", "^NDX", "^VIX", "^MOVE"], "1985-01-01")
+    market = market_frame(idx["^GSPC"], idx["^NDX"], idx["^VIX"], idx["^MOVE"], breadth(stocks))
+    years, acum, every = (year0, 2100), ("rng", "pml"), ("pwl", "rng", "pml")
+    ladder = [
+        Variant("Barrida PWL", years=years),
+        Variant("Acumulación (varios mínimos semanales o PML)", acum, years=years),
+        Variant("+ S&P 500 y Nasdaq manipulan", acum, True, years=years),
+        Variant("+ amplitud < 20 %", acum, True, 20, years=years),
+        Variant("+ VIX < 20", acum, True, 20, 20, years=years),
+        Variant("+ MOVE a la baja", acum, True, 20, 20, True, years=years),
+    ]
+    on_index = [
+        Variant("Índices: cualquier barrida semanal", ("pwl",), years=years, min_risk=0.005),
+        Variant("Índices: + alineados + amplitud < 30 %", every, True, 30, years=years, min_risk=0.005),
+    ]
+    rows = [r.stats() for r in run_variants(stocks, market, ladder)]
+    rows += [r.stats() for r in run_variants({k: idx[k] for k in ("^GSPC", "^NDX")}, market, on_index, cost=0.0005)]
+    for freq, label in (("W", "SMT semanal"), ("ME", "SMT mensual")):
+        for buy in ("lagger", "sweeper"):
+            trades = smt_trades(idx, "^GSPC", "^NDX", freq, buy, start_year=1990)
+            rows.append({"variante": f"{label}, compra {'el que no barre' if buy == 'lagger' else 'el que barre'} (1990+)"} | r_stats(trades))
+    table = pd.DataFrame(rows)[["variante", "trades", "winrate", "avg_r", "avg_ret_pct", "avg_weeks"]]
+    with pd.option_context("display.width", 200, "display.max_columns", 20):
+        print(table.round(2).to_string(index=False))
+    print("\nOJO: componentes ACTUALES del S&P 500 (sesgo de supervivencia). Las señales con amplitud baja se "
+          "concentran en pocas semanas: muchas operaciones son el mismo evento de mercado.")
+    return 0
+
+
+def cmd_indices(breadth_below: float = 30, risk_pct: float = 2.0) -> int:
+    """Barridas semanales en S&P 500 y Nasdaq 100 (1990+): salidas, rotación y riesgo por operación."""
+    from backtest.confluence import Variant, market_frame, select, stock_signals
+    from backtest.index_strategy import EXITS, Exit, curve_stats, equity_curve, manage, monte_carlo, rotate
+    from backtest.market import breadth, load_daily, sp500_members
+    from backtest.weekly import r_stats
+
+    sp = load_daily(list(sp500_members().ticker), "1989-01-01")
+    ndx_members = load_daily(list(pd.read_csv(Path(__file__).with_name("backtest") / "ndx100.csv").ticker), "1989-01-01")
+    idx = load_daily(["^GSPC", "^NDX", "^VIX", "^MOVE"], "1985-01-01")
+    market = market_frame(idx["^GSPC"], idx["^NDX"], idx["^VIX"], idx["^MOVE"], breadth(sp))
+    rule = Variant("indices", ("pwl", "rng", "pml"), True, breadth_below, years=(1990, 2100), min_risk=0.005)
+    signals = {tk: select(stock_signals(idx[tk]), market, rule) for tk in ("^GSPC", "^NDX")}
+    start, end = pd.Timestamp("1990-01-01"), idx["^GSPC"].index[-1]
+
+    rows = []
+    for ex in EXITS:
+        for tk, sig in signals.items():
+            rows.append({"salida": ex.name, "indice": tk} | r_stats(manage(tk, idx[tk], sig, ex, 0.0005)))
+    exits = pd.DataFrame(rows)[["salida", "indice", "trades", "winrate", "avg_r", "avg_ret_pct", "avg_weeks"]]
+
+    trades = {tk: manage(tk, idx[tk], sig, Exit("TP 3R", 3.0), 0.0005) for tk, sig in signals.items()}
+    members = pd.DataFrame({"^GSPC": breadth(sp).resample("W-FRI").last(), "^NDX": breadth(ndx_members).resample("W-FRI").last()})
+    combos = {
+        "Solo S&P 500": trades["^GSPC"],
+        "Solo Nasdaq 100": trades["^NDX"],
+        "Los dos": trades["^GSPC"] + trades["^NDX"],
+        "Alternar: más empresas sobre su media": rotate(trades, members, "high"),
+    }
+    rows = []
+    for name, t in combos.items():
+        st = curve_stats(equity_curve(t, risk_pct / 100), start, end)
+        rows.append({"combinacion": name} | r_stats(t) | {f"cagr_{risk_pct:g}%": st["cagr_pct"], f"max_dd_{risk_pct:g}%": st["max_dd_pct"]})
+    table = pd.DataFrame(rows)[["combinacion", "trades", "winrate", "avg_r", f"cagr_{risk_pct:g}%", f"max_dd_{risk_pct:g}%"]]
+
+    rot = combos["Alternar: más empresas sobre su media"]
+    rs = [t.r for t in rot if t.exit_date is not None]
+    years = (end - start).days / 365.25
+    mc = monte_carlo(pd.Series(rs).to_numpy(), len(rs) / years, 10, [0.005, 0.01, 0.015, 0.02, 0.03, 0.05])
+    with pd.option_context("display.width", 200, "display.max_columns", 20):
+        print(exits.round(2).to_string(index=False))
+        print(f"\nCon TP 3R, arriesgando {risk_pct:g} % por operación:")
+        print(table.round(2).to_string(index=False))
+        print("\nMonte Carlo de la rotación (10 años):")
+        print(mc.round(1).to_string(index=False))
+    print("\nOJO: amplitud con los componentes ACTUALES del S&P 500 (sesgo de supervivencia). El Monte Carlo "
+          "remuestrea operaciones sueltas y subestima las rachas de los mercados bajistas.")
+    return 0
+
+
 def cmd_test_email(cfg: AppConfig) -> int:
     build_notifier(cfg).send(f"[{cfg.symbol}] Email de prueba", "Si lees esto, la configuración SMTP funciona.")
     log.info("Email de prueba enviado")
@@ -294,6 +423,16 @@ def main(argv: list[str] | None = None) -> int:
     cp.add_argument("--to", dest="date_to", default="2026-01-01", help="fin UTC, exclusivo (YYYY-MM-DD)")
     cp.add_argument("--spread", type=float, default=0.0, help="spread + comisión en pips")
     cp.add_argument("--out-dir", default="backtest", help="carpeta de los CSV de resultados")
+    wk = sub.add_parser("weekly", help="backtest semanal en acciones y cripto (Yahoo)")
+    wk.add_argument("--from", dest="date_from", default="2010-01-01", help="inicio (YYYY-MM-DD)")
+    wk.add_argument("--tickers", nargs="+", help="tickers de Yahoo; por defecto ~45 grandes de EE. UU. + BTC y ETH")
+    wk.add_argument("--cost", type=float, default=0.1, help="coste ida y vuelta en %% del precio")
+    wk.add_argument("--out-dir", default="backtest", help="carpeta de los CSV de resultados")
+    cf = sub.add_parser("confluence", help="barridas con filtros de mercado en el S&P 500 y SMT con el Nasdaq")
+    cf.add_argument("--from", dest="date_from", default="2010-01-01", help="primer año de señales (YYYY-MM-DD)")
+    ix = sub.add_parser("indices", help="barridas semanales en S&P 500 y Nasdaq 100: salidas, rotación y riesgo")
+    ix.add_argument("--breadth", type=float, default=30, help="umbral de amplitud del S&P 500 en %% (sobreventa)")
+    ix.add_argument("--risk", type=float, default=2.0, help="riesgo por operación en %% del capital")
     sub.add_parser("test-email", help="envía un email de prueba")
     args = parser.parse_args(argv)
 
@@ -324,6 +463,12 @@ def main(argv: list[str] | None = None) -> int:
         except (MT5Error, CandleValidationError) as exc:
             log.error("%s", exc)
             return 1
+    if args.command == "confluence":
+        return cmd_confluence(args.date_from)
+    if args.command == "indices":
+        return cmd_indices(args.breadth, args.risk)
+    if args.command == "weekly":
+        return cmd_weekly(args.date_from, args.tickers, args.cost, args.out_dir)
     return cmd_test_email(cfg)
 
 

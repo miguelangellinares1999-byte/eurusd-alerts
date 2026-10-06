@@ -6,3 +6,6 @@ logs/
 state/*.json
 backtest/*.csv
 *.pdf
+backtest/cache/
+!backtest/sp500.csv
+!backtest/ndx100.csv
