@@ -60,7 +60,7 @@ chartz:
 # M15: sweep + CHoCH de una sola vela con FVG, sesgo del TR de 4H, killzone de Londres.
 daily_cycle:
   enabled: true
-  dry_run: true            # true = solo log y diario en state_path, sin email
+  dry_run: false           # true = solo log y diario en state_path, sin email
   symbol: GBPUSD
   mt5_symbol: GBPUSD
   yahoo_ticker: "GBPUSD=X"
