@@ -1,0 +1,68 @@
+name: Alerta diaria SPY y QQQ
+
+on:
+  schedule:
+    # 15:30 de Nueva York en horario de verano (19:30 UTC) y de invierno (20:30 UTC), lunes a viernes.
+    # La que cae fuera de la ventana 15:00-16:00 de Nueva York sale sin hacer nada. GitHub puede
+    # retrasar las ejecuciones programadas unos minutos: por eso se lanza 30 min antes del cierre.
+    - cron: "30 19 * * 1-5"
+    - cron: "30 20 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Solo log, sin email"
+        type: boolean
+        default: false
+      force:
+        description: "Ignorar la ventana horaria y los días ya procesados"
+        type: boolean
+        default: false
+
+concurrency:
+  group: etf-alert
+  cancel-in-progress: false
+
+jobs:
+  etf-alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+      ALERT_TO: ${{ secrets.ALERT_TO }}
+      ETF_CAPITAL: ${{ vars.ETF_CAPITAL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # Posiciones avisadas y días ya procesados, guardados entre ejecuciones.
+      - name: Restaurar estado
+        uses: actions/cache/restore@v4
+        with:
+          path: state/etf_alerts.json
+          key: etf-state-${{ github.run_id }}
+          restore-keys: etf-state-
+
+      - name: Ejecutar
+        run: python main.py etf-alert ${{ inputs.dry_run && '--dry-run' || '' }} ${{ inputs.force && '--force' || '' }} --json report/etf_report.json
+
+      - name: Guardar informe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: etf-report
+          path: report/etf_report.json
+          if-no-files-found: ignore
+
+      - name: Guardar estado
+        if: always() && hashFiles('state/etf_alerts.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: state/etf_alerts.json
+          key: etf-state-${{ github.run_id }}-${{ github.run_attempt }}

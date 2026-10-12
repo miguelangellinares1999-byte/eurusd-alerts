@@ -9,6 +9,8 @@ Uso:
     python main.py weekly [--from 2010-01-01] [--cost 0.1] [--tickers AAPL BTC-USD]  # acciones/cripto semanal
     python main.py confluence              # barridas + índices/amplitud/VIX/MOVE en el S&P 500 y SMT
     python main.py indices [--risk 2]      # S&P 500 y Nasdaq 100: salidas, rotación y riesgo (1990+)
+    python main.py index-alert [--dry-run] # informe semanal de barridas en índices por email
+    python main.py etf-alert [--dry-run] [--force]  # alerta diaria RSI(2) en SPY y QQQ antes del cierre
     python main.py test-email              # envía un email de prueba
 """
 
@@ -397,6 +399,49 @@ def cmd_indices(breadth_below: float = 30, risk_pct: float = 2.0) -> int:
     return 0
 
 
+def cmd_index_alert(cfg: AppConfig, dry_run: bool = False, json_out: str | None = None) -> int:
+    """Informe semanal de barridas en S&P 500 y Nasdaq 100 por email (sábado, tras el cierre del viernes)."""
+    import json
+
+    from index_alerts import IndexStore, run_index_alerts
+
+    ia = cfg.index_alerts
+    if not ia.enabled:
+        log.info("index_alerts desactivado en config.yaml")
+        return 0
+    notifier = LogNotifier() if (dry_run or ia.dry_run) else build_notifier(cfg)
+    store = IndexStore(ia.state_path).load()
+    rep = run_index_alerts(ia, store, notifier)
+    chosen = [s for s in rep["signals"] if s.get("chosen")]
+    log.info("Informe de índices semana %s: %s", rep["week"], f"señal en {chosen[0]['name']}" if chosen else "sin señal")
+    if json_out:
+        Path(json_out).parent.mkdir(parents=True, exist_ok=True)
+        Path(json_out).write_text(json.dumps(rep, indent=2, ensure_ascii=False), encoding="utf-8")
+    return 0
+
+
+def cmd_etf_alert(cfg: AppConfig, dry_run: bool = False, force: bool = False, json_out: str | None = None) -> int:
+    """Alerta diaria de reversión a la media en SPY y QQQ (antes del cierre de EE. UU.)."""
+    import json
+
+    from etf_alerts import EtfStore, run_etf_alerts
+
+    ea = cfg.etf_alerts
+    if not ea.enabled:
+        log.info("etf_alerts desactivado en config.yaml")
+        return 0
+    notifier = LogNotifier() if (dry_run or ea.dry_run) else build_notifier(cfg)
+    store = EtfStore(ea.state_path).load()
+    rep = run_etf_alerts(ea, store, notifier, force=force)
+    if rep is None:
+        return 0
+    log.info("ETF %s: %s", rep["day"], ", ".join(f"{r['ticker']} {r['action']}" for r in rep["etfs"]))
+    if json_out:
+        Path(json_out).parent.mkdir(parents=True, exist_ok=True)
+        Path(json_out).write_text(json.dumps(rep, indent=2, ensure_ascii=False), encoding="utf-8")
+    return 0
+
+
 def cmd_test_email(cfg: AppConfig) -> int:
     build_notifier(cfg).send(f"[{cfg.symbol}] Email de prueba", "Si lees esto, la configuración SMTP funciona.")
     log.info("Email de prueba enviado")
@@ -433,6 +478,13 @@ def main(argv: list[str] | None = None) -> int:
     ix = sub.add_parser("indices", help="barridas semanales en S&P 500 y Nasdaq 100: salidas, rotación y riesgo")
     ix.add_argument("--breadth", type=float, default=30, help="umbral de amplitud del S&P 500 en %% (sobreventa)")
     ix.add_argument("--risk", type=float, default=2.0, help="riesgo por operación en %% del capital")
+    ia = sub.add_parser("index-alert", help="informe semanal de barridas en S&P 500 y Nasdaq 100 por email")
+    ia.add_argument("--dry-run", action="store_true", help="escribe el informe en el log en vez de enviarlo")
+    ia.add_argument("--json", dest="json_out", help="guarda también el informe en este JSON")
+    ea = sub.add_parser("etf-alert", help="alerta diaria RSI(2) en SPY y QQQ antes del cierre de EE. UU.")
+    ea.add_argument("--dry-run", action="store_true", help="escribe el aviso en el log en vez de enviarlo")
+    ea.add_argument("--force", action="store_true", help="ignora la ventana horaria y los días ya procesados")
+    ea.add_argument("--json", dest="json_out", help="guarda también el informe en este JSON")
     sub.add_parser("test-email", help="envía un email de prueba")
     args = parser.parse_args(argv)
 
@@ -467,6 +519,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_confluence(args.date_from)
     if args.command == "indices":
         return cmd_indices(args.breadth, args.risk)
+    if args.command == "index-alert":
+        return cmd_index_alert(cfg, args.dry_run, args.json_out)
+    if args.command == "etf-alert":
+        return cmd_etf_alert(cfg, args.dry_run, args.force, args.json_out)
     if args.command == "weekly":
         return cmd_weekly(args.date_from, args.tickers, args.cost, args.out_dir)
     return cmd_test_email(cfg)

@@ -71,6 +71,41 @@ daily_cycle:
   lookback_days: 40        # historial M15 por pasada (el TR de 4H necesita semanas)
   state_path: state/daily_cycle_gbpusd.json
 
+# Alerta semanal de barridas en S&P 500 y Nasdaq 100 (index_alerts.py, `python main.py index-alert`).
+# En GitHub Actions corre los sábados por la mañana (.github/workflows/index-alert.yml).
+index_alerts:
+  enabled: true
+  dry_run: false           # true = el informe va al log en vez de por email
+  capital: 10000           # capital de la cuenta para calcular lotes (o variable INDEX_CAPITAL)
+  risk_pct: 2              # % del capital arriesgado por operación
+  tp_r: 3                  # objetivo en múltiplos del riesgo
+  breadth_below: 30        # amplitud del S&P 500 (% sobre su media de 50) que se considera sobreventa
+  min_risk_pct: 0.5        # se ignoran barridas con el SL a menos de este % de la entrada
+  lot_step: 0.01           # lote mínimo / incremento en MT5
+  weekly_summary: true     # email todas las semanas, aunque no haya señal
+  state_path: state/index_alerts.json
+  symbols:                 # contract_size = unidades del índice por lote (míralo en MT5: especificación del símbolo)
+    - {ticker: "^GSPC", name: "S&P 500", mt5: US500, contract_size: 1}
+    - {ticker: "^NDX", name: "Nasdaq 100", mt5: NAS100, contract_size: 1}
+
+# Alerta diaria de reversión a la media en SPY y QQQ (etf_alerts.py, `python main.py etf-alert`).
+# RSI(2) < 10 sobre la MM200, salida al cerrar sobre la MM5 o a las 10 sesiones, stop 3 ATR.
+# Se ejecuta antes del cierre de EE. UU. para entrar al cierre (.github/workflows/etf-alert.yml).
+etf_alerts:
+  enabled: true
+  dry_run: false           # true = el aviso va al log en vez de por email
+  capital: 10000           # capital de la cuenta (o variable ETF_CAPITAL)
+  alloc_pct: 50            # % del capital por ETF (como en el backtest: mitad SPY, mitad QQQ)
+  stop_atr: 3
+  max_days: 10
+  lot_step: 1              # acciones mínimas por orden en MT5
+  window: ["15:00", "16:00"]  # hora de Nueva York en la que se comprueba la señal
+  daily_summary: false     # true = email también los días sin nada que hacer
+  state_path: state/etf_alerts.json
+  symbols:
+    - {ticker: SPY, mt5: SPY.P}
+    - {ticker: QQQ, mt5: QQQ.OQ}
+
 alerts:
   max_alert_age_minutes: 30      # no se envían alertas más antiguas (p.ej. al arrancar)
   dry_run: false                 # true = se escriben en el log en vez de enviarse por email

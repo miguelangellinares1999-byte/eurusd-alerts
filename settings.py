@@ -11,6 +11,8 @@ import yaml
 from dotenv import load_dotenv
 
 from daily_cycle_alerts import DailyCycleAlerts
+from etf_alerts import EtfAlerts, EtfSymbol
+from index_alerts import IndexAlerts, IndexSymbol
 from detector.chartz import ChartzConfig
 from detector.daily_cycle import DailyCycleConfig
 from detector.config import DetectorConfig, SessionWindow
@@ -56,6 +58,8 @@ class AppConfig:
     log_backup_count: int
     chartz: ChartzConfig = field(default_factory=ChartzConfig)
     daily_cycle: DailyCycleAlerts = field(default_factory=DailyCycleAlerts)
+    index_alerts: IndexAlerts = field(default_factory=IndexAlerts)
+    etf_alerts: EtfAlerts = field(default_factory=EtfAlerts)
 
 
 def _parse_time(value: str) -> time:
@@ -120,6 +124,55 @@ def _daily_cycle(raw: dict) -> DailyCycleAlerts:
         tp_r=float(raw.get("tp_r", 2)),
         state_path=_path(raw.get("state_path", "state/daily_cycle_gbpusd.json")),
         detector=det,
+    )
+
+
+def _index_alerts(raw: dict) -> IndexAlerts:
+    if not raw:
+        return IndexAlerts()
+    default = IndexAlerts()
+    symbols = [
+        IndexSymbol(
+            ticker=str(s["ticker"]),
+            name=str(s.get("name", s["ticker"])),
+            mt5=str(s.get("mt5", s["ticker"])),
+            contract_size=float(s.get("contract_size", 1)),
+        )
+        for s in raw.get("symbols", [])
+    ] or default.symbols
+    return IndexAlerts(
+        enabled=bool(raw.get("enabled", False)),
+        dry_run=bool(raw.get("dry_run", True)),
+        capital=float(os.getenv("INDEX_CAPITAL") or raw.get("capital", default.capital)),
+        risk_pct=float(raw.get("risk_pct", default.risk_pct)),
+        tp_r=float(raw.get("tp_r", default.tp_r)),
+        breadth_below=float(raw.get("breadth_below", default.breadth_below)),
+        min_risk_pct=float(raw.get("min_risk_pct", default.min_risk_pct)),
+        lot_step=float(raw.get("lot_step", default.lot_step)),
+        weekly_summary=bool(raw.get("weekly_summary", True)),
+        state_path=_path(raw.get("state_path", "state/index_alerts.json")),
+        symbols=symbols,
+    )
+
+
+def _etf_alerts(raw: dict) -> EtfAlerts:
+    if not raw:
+        return EtfAlerts()
+    default = EtfAlerts()
+    symbols = [EtfSymbol(ticker=str(s["ticker"]), mt5=str(s.get("mt5", s["ticker"]))) for s in raw.get("symbols", [])]
+    window = raw.get("window")
+    return EtfAlerts(
+        enabled=bool(raw.get("enabled", False)),
+        dry_run=bool(raw.get("dry_run", True)),
+        capital=float(os.getenv("ETF_CAPITAL") or raw.get("capital", default.capital)),
+        alloc_pct=float(raw.get("alloc_pct", default.alloc_pct)),
+        stop_atr=float(raw.get("stop_atr", default.stop_atr)),
+        max_days=int(raw.get("max_days", default.max_days)),
+        lot_step=float(raw.get("lot_step", default.lot_step)),
+        window=(_parse_time(window[0]), _parse_time(window[1])) if window else default.window,
+        daily_summary=bool(raw.get("daily_summary", False)),
+        state_path=_path(raw.get("state_path", "state/etf_alerts.json")),
+        symbols=symbols or default.symbols,
     )
 
 
@@ -191,4 +244,6 @@ def load_config(path: str | Path = ROOT / "config.yaml", env_file: str | Path | 
         log_backup_count=int(logging_cfg.get("backup_count", 5)),
         chartz=_chartz(raw.get("chartz", {}) or {}, detector.pip_size),
         daily_cycle=_daily_cycle(raw.get("daily_cycle", {}) or {}),
+        index_alerts=_index_alerts(raw.get("index_alerts", {}) or {}),
+        etf_alerts=_etf_alerts(raw.get("etf_alerts", {}) or {}),
     )

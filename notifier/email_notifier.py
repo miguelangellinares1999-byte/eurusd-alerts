@@ -57,14 +57,17 @@ def format_alert(setup: Setup, pip_size: float = 0.0001) -> tuple[str, str]:
 
 class Notifier(ABC):
     @abstractmethod
-    def send(self, subject: str, body: str) -> None:
-        """Debe lanzar excepción si el envío falla (el setup se reintentará)."""
+    def send(self, subject: str, body: str, html_body: str | None = None) -> None:
+        """Debe lanzar excepción si el envío falla (el setup se reintentará).
+
+        `html_body` es una versión HTML opcional; `body` sigue siendo el texto plano.
+        """
 
 
 class LogNotifier(Notifier):
     """Modo dry_run: escribe la alerta en el log."""
 
-    def send(self, subject: str, body: str) -> None:
+    def send(self, subject: str, body: str, html_body: str | None = None) -> None:
         log.warning("ALERTA (dry run): %s\n%s", subject, body)
 
 
@@ -78,12 +81,14 @@ class EmailNotifier(Notifier):
         self.host = host
         self.port = port
 
-    def send(self, subject: str, body: str) -> None:
+    def send(self, subject: str, body: str, html_body: str | None = None) -> None:
         msg = EmailMessage()
         msg["Subject"] = subject
         msg["From"] = self.user
         msg["To"] = ", ".join(self.to)
         msg.set_content(body)
+        if html_body:
+            msg.add_alternative(html_body, subtype="html")
         context = ssl.create_default_context()
         if self.port == 465:
             with smtplib.SMTP_SSL(self.host, self.port, context=context, timeout=30) as smtp:

@@ -9,3 +9,4 @@ backtest/*.csv
 backtest/cache/
 !backtest/sp500.csv
 !backtest/ndx100.csv
+reports/

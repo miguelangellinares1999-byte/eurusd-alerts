@@ -173,6 +173,30 @@ Con `dry_run: true` no se envía email: la señal se escribe en el log (`ALERTA 
 
 El backtest se hizo con velas de MT5; con Yahoo (GitHub Actions) las velas difieren algo y pueden salir señales distintas.
 
+## Alerta diaria de SPY y QQQ (RSI(2))
+
+`python main.py etf-alert` comprueba la estrategia de `backtest/etf_meanrev.py` en SPY y QQQ con la vela del día aún abierta (Yahoo), para poder entrar al cierre como en el backtest:
+
+- **Comprar al cierre** si el precio está por encima de la MM200 y el RSI(2) baja de 10. Stop a 3 ATR(14) y tamaño de `alloc_pct` % del capital por ETF.
+- **Vender al cierre** con el primer cierre por encima de la MM5 o a las 10 sesiones. Si el mínimo toca el stop, avisa de que la operación se ha cerrado.
+
+Solo actúa entre las 15:00 y las 16:00 de Nueva York (`window`), una vez por día y solo si hay vela de hoy (los festivos no hace nada). Manda email únicamente cuando hay algo que hacer, salvo con `daily_summary: true`. Las posiciones avisadas se guardan en `state/etf_alerts.json`: la alerta da por hecho que ejecutas cada aviso. `--dry-run` escribe el aviso en el log y `--force` ignora la ventana horaria y los días ya procesados.
+
+En GitHub Actions (`.github/workflows/etf-alert.yml`) se lanza de lunes a viernes a las 15:30 de Nueva York (dos crons en UTC, uno para el horario de verano y otro para el de invierno; el que cae fuera de la ventana no hace nada) y guarda el estado en la caché. El capital puede venir de la variable `ETF_CAPITAL` del repositorio.
+
+## Bot MT5 para pruebas de fondeo en índices (IndexPropBot)
+
+`mt5/IndexPropBot.mq5` es un Expert Advisor con el perfil "equilibrado" de `backtest/index_prop_optimize.py` (pruebas de +10% / DD 10% / diario 5% sin límite de tiempo):
+
+- **ORB 30 en NAS100 (1.5%)**: a las 10:00 NY, buy stop en el máximo y sell stop en el mínimo del rango 09:30–10:00 (OCO), SL en el otro extremo y TP 2R. Las órdenes se borran a las 12:00 NY y la posición se cierra a las 16:00 NY.
+- **RSI(2) diario en SPX500 y NAS100 (3%)**, solo compras: a las 16:50 NY, si el cierre está por encima de la SMA200 y el RSI(2) baja de 10, compra con SL a 2.5 ATR(14). Sale al primer cierre por encima de la SMA5 o a los 10 días.
+- **Reglas de la prueba**: el riesgo se calcula sobre el saldo inicial, no se abre nada que pueda superar el 80% del límite diario, cerca del objetivo arriesga solo lo necesario y, al llegar a +10% o al DD máximo, cierra todo y deja de operar. Si las pérdidas del día (con flotante) llegan al 95% del límite diario, cierra todo hasta el día siguiente.
+- No arranca en una cuenta real salvo con `InpAllowReal = true`. La cuenta debe ser *hedging* (en *netting* se mezclarían las posiciones ORB y RSI2 de NAS100). Cuenta con el servidor a hora NY + 7 (`InpServerMinusNY`).
+
+Instalación: copia `mt5/IndexPropBot.mq5` a `MQL5\Experts` (MT5: Archivo → Abrir carpeta de datos), compílalo (F7 en MetaEditor) y copia `mt5/presets/*.set` a `MQL5\Presets` y `MQL5\Profiles\Tester`. Para operarlo: Algo Trading activado, arrastrar el bot a un gráfico de NAS100 (M5), pestaña Común → "Permitir trading algorítmico" y en Parámetros → Cargar `IndexPropBot_fondeo_100k.set`, cambiando `InpInitialBalance` al tamaño de la cuenta. El estado (saldo inicial, saldo al empezar el día, prueba terminada) se guarda en las variables globales del terminal (F3, prefijo `IPB_`); para empezar una prueba nueva hay que borrarlas.
+
+**Verificación independiente**: `mt5/verificar_en_mt5.bat` (con MT5 cerrado) pasa el bot por el Probador de Estrategias (OHLC de M1 desde 2020: BlackBull solo guarda una semana de ticks reales) y `InpVerifyMode = true` (riesgo fijo, sin reglas de fondeo), y después `python -m backtest.verify_mt5` empareja sus operaciones (`Common\Files\IndexPropBot_trades.csv`) con las del backtest en Python por día y estrategia. El agente local del probador usa el puerto 127.0.0.1:3000; si otro programa lo ocupa (un servidor de desarrollo web, por ejemplo) la prueba falla con "tester agent authorization error". Diferencias conocidas: el RSI(2) del bot entra a las 16:50 NY y el backtest al cierre de las 17:00; si las dos órdenes del ORB saltan en la misma vela el backtest descarta el día y el bot opera la primera.
+
 ## Despliegue
 
 Elige **una** de las dos formas: un proceso permanente (`run`) o una ejecución por minuto (`once`). `once` sale enseguida si no ha cerrado una vela nueva, así que ejecutarlo cada minuto es barato.
