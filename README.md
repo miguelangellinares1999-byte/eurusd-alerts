@@ -197,6 +197,36 @@ Instalación: copia `mt5/IndexPropBot.mq5` a `MQL5\Experts` (MT5: Archivo → Ab
 
 **Verificación independiente**: `mt5/verificar_en_mt5.bat` (con MT5 cerrado) pasa el bot por el Probador de Estrategias (OHLC de M1 desde 2020: BlackBull solo guarda una semana de ticks reales) y `InpVerifyMode = true` (riesgo fijo, sin reglas de fondeo), y después `python -m backtest.verify_mt5` empareja sus operaciones (`Common\Files\IndexPropBot_trades.csv`) con las del backtest en Python por día y estrategia. El agente local del probador usa el puerto 127.0.0.1:3000; si otro programa lo ocupa (un servidor de desarrollo web, por ejemplo) la prueba falla con "tester agent authorization error". Diferencias conocidas: el RSI(2) del bot entra a las 16:50 NY y el backtest al cierre de las 17:00; si las dos órdenes del ORB saltan en la misma vela el backtest descarta el día y el bot opera la primera.
 
+## Bot MT5 CRT para cuentas fondeadas (CRTPropBot)
+
+`mt5/CRTPropBot.mq5` opera la cartera CRT H4 → M15 elegida con `backtest/crt_funded.py` (configuraciones positivas dentro y fuera de muestra, 2017-22 / 2023-26) en una sola cuenta, con 0,5% de riesgo por operación sobre el saldo inicial:
+
+| Estrategia | Vela C | Sesgo | Entrada M15 | TP |
+|---|---|---|---|---|
+| NAS100 | todas (ventana 2 velas H4) | vela diaria anterior | límite en FVG | 1R |
+| SPX500 | Londres (01:00 NY) | EMA50 H4 | ruptura de estructura (MSS) | 2R + break-even |
+| US30 | Londres | vela diaria anterior | MSS | 2R |
+| GBPUSD | Londres y NY (09:00 NY) | EMA50 H4 | límite en FVG | 2R + break-even |
+| XAUUSD | NY | premium/discount del día | MSS | extremo opuesto de A |
+
+En el backtest de la cartera (2023-26) salen ~111 operaciones/año, ~17 R/año y un DD máximo de 14,6 R (7,3% al 0,5%), sin cuentas perdidas; al 0,75% ya se pierde alguna cuenta. Protecciones del bot (todas desactivadas con `InpVerifyMode`):
+
+- Lote redondeado hacia abajo (nunca más del 0,5%) y limitado por el margen libre; si no llega al lote mínimo no opera (en una cuenta de 5k pasa en ~14% de los setups de XAUUSD).
+- Pérdida diaria medida como The5%ers: desde max(saldo, equity) a medianoche del servidor, contando flotante y el riesgo de lo abierto y pendiente. No abre nada que pueda superar el 80% del límite y cierra todo al 90% hasta el día siguiente.
+- DD estático: no abre nada que pueda dejar la equity a menos de un 1% del suelo; al tocar suelo + 0,2% cierra todo y se detiene.
+- Noticias de alto impacto (calendario de MT5, USD y las divisas del símbolo): sin entradas y sin límites pendientes 5 min antes y después (The5%ers prohíbe ejecutar órdenes 2 min antes y después). Las posiciones abiertas mantienen su SL/TP, y uno de ellos podría saltar dentro de esa ventana.
+- Viernes: sin entradas desde las 12:00 NY y cierre total a las 16:30 NY (afecta a ~2,5% de las operaciones del backtest).
+- No arranca si el saldo no cuadra con `InpInitialBalance`, si falta un símbolo o (aviso) si el servidor no va a GMT+2/+3 (= NY + 7). En una cuenta real necesita `InpAllowReal = true`.
+- Al arrancar borra sus órdenes pendientes antiguas; un setup a medio formar se pierde si se reinicia el terminal.
+
+Presets (`mt5/presets/`): `CRTPropBot_The5ers_5k_fondeada.set` (sin objetivo), `CRTPropBot_The5ers_5k_fase1.set` (objetivo 10%; 8% en el High Stakes clásico), `CRTPropBot_The5ers_5k_fase2.set` (5%), `CRTPropBot_BlackBull_demo_5k.set` (mismas reglas, símbolos de BlackBull) y `CRTPropBot_verificacion.set`. En The5%ers los nombres de los símbolos (`GBPUSD`, `XAUUSD`, índices) pueden ser distintos: el bot avisa si alguno no existe, y se cambian en Parámetros.
+
+Instalación (igual que IndexPropBot): copia `mt5/CRTPropBot.mq5` a `MQL5\Experts` y compílalo, copia `mt5/presets/CRTPropBot_*.set` a `MQL5\Presets` y `MQL5\Profiles\Tester`, arrastra el bot a **un** gráfico cualquiera (p. ej. NAS100 M15): opera los 5 símbolos desde ahí. El estado va en variables globales del terminal (F3, prefijo `CRT_`).
+
+- **Probarlo en BlackBull**: abre una demo nueva de **5.000 USD** (Archivo → Abrir una cuenta), aparte de la de IndexPropBot: los límites diario y de DD de cada bot cuentan toda la equity de la cuenta. Con esa cuenta conectada, `mt5/arrancar_crt_demo.bat` abre MT5 con el bot y `CRTPropBot_BlackBull_demo_5k.set`.
+- **Verificación**: `mt5/verificar_crt_en_mt5.bat` (con MT5 cerrado) pasa el bot por el probador desde 2023 y `python -m backtest.verify_crt` empareja sus operaciones con las del backtest. `mt5/tester_crt_fondeo.ini` hace la misma prueba con las reglas de la cuenta.
+- **The5%ers**: instala su terminal MT5, copia los mismos archivos, carga el preset de la fase que toque (al pasar de fase, borra las variables `CRT_` y carga el siguiente) y, ya fondeado, `CRTPropBot_The5ers_5k_fondeada.set`. Los retiros se piden a mano; tras un retiro el saldo vuelve al inicial y el bot sigue igual.
+
 ## Despliegue
 
 Elige **una** de las dos formas: un proceso permanente (`run`) o una ejecución por minuto (`once`). `once` sale enseguida si no ha cerrado una vela nueva, así que ejecutarlo cada minuto es barato.
