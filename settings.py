@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from daily_cycle_alerts import DailyCycleAlerts
 from etf_alerts import EtfAlerts, EtfSymbol
 from index_alerts import IndexAlerts, IndexSymbol
+from sector_alerts import SectorAlerts
 from detector.chartz import ChartzConfig
 from detector.daily_cycle import DailyCycleConfig
 from detector.config import DetectorConfig, SessionWindow
@@ -60,6 +61,7 @@ class AppConfig:
     daily_cycle: DailyCycleAlerts = field(default_factory=DailyCycleAlerts)
     index_alerts: IndexAlerts = field(default_factory=IndexAlerts)
     etf_alerts: EtfAlerts = field(default_factory=EtfAlerts)
+    sector_alerts: SectorAlerts = field(default_factory=SectorAlerts)
 
 
 def _parse_time(value: str) -> time:
@@ -176,6 +178,31 @@ def _etf_alerts(raw: dict) -> EtfAlerts:
     )
 
 
+def _sector_alerts(raw: dict) -> SectorAlerts:
+    if not raw:
+        return SectorAlerts()
+    d = SectorAlerts()
+    universe = str(raw.get("universe", d.universe))
+    if universe not in ("sp500", "ndx", "ambos"):
+        raise ValueError(f"sector_alerts.universe inválido {universe!r}: usa sp500, ndx o ambos")
+    return SectorAlerts(
+        enabled=bool(raw.get("enabled", False)),
+        dry_run=bool(raw.get("dry_run", True)),
+        universe=universe,
+        capital=float(os.getenv("SECTOR_CAPITAL") or raw.get("capital", d.capital)),
+        risk_pct=float(raw.get("risk_pct", d.risk_pct)),
+        max_positions=int(raw.get("max_positions", d.max_positions)),
+        max_alloc_pct=float(raw.get("max_alloc_pct", d.max_alloc_pct)),
+        top=int(raw.get("top", d.top)),
+        window=int(raw.get("window", d.window)),
+        tp_r=float(raw.get("tp_r", d.tp_r)),
+        min_risk_pct=float(raw.get("min_risk_pct", d.min_risk_pct)),
+        lot_step=float(raw.get("lot_step", d.lot_step)),
+        weekly_summary=bool(raw.get("weekly_summary", True)),
+        state_path=_path(raw.get("state_path", "state/sector_alerts.json")),
+    )
+
+
 def _path(value: str) -> Path:
     p = Path(value)
     return p if p.is_absolute() else ROOT / p
@@ -246,4 +273,5 @@ def load_config(path: str | Path = ROOT / "config.yaml", env_file: str | Path | 
         daily_cycle=_daily_cycle(raw.get("daily_cycle", {}) or {}),
         index_alerts=_index_alerts(raw.get("index_alerts", {}) or {}),
         etf_alerts=_etf_alerts(raw.get("etf_alerts", {}) or {}),
+        sector_alerts=_sector_alerts(raw.get("sector_alerts", {}) or {}),
     )

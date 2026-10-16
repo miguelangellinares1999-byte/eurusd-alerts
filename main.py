@@ -10,6 +10,7 @@ Uso:
     python main.py confluence              # barridas + índices/amplitud/VIX/MOVE en el S&P 500 y SMT
     python main.py indices [--risk 2]      # S&P 500 y Nasdaq 100: salidas, rotación y riesgo (1990+)
     python main.py index-alert [--dry-run] # informe semanal de barridas en índices por email
+    python main.py sector-alert [--dry-run] # informe semanal de rotación sectorial en acciones por email
     python main.py etf-alert [--dry-run] [--force]  # alerta diaria RSI(2) en SPY y QQQ antes del cierre
     python main.py test-email              # envía un email de prueba
 """
@@ -420,6 +421,27 @@ def cmd_index_alert(cfg: AppConfig, dry_run: bool = False, json_out: str | None 
     return 0
 
 
+def cmd_sector_alert(cfg: AppConfig, dry_run: bool = False, json_out: str | None = None) -> int:
+    """Informe semanal de rotación sectorial en S&P 500 y Nasdaq 100 por email (sábado)."""
+    import json
+
+    from sector_alerts import SectorStore, run_sector_alerts
+
+    sa = cfg.sector_alerts
+    if not sa.enabled:
+        log.info("sector_alerts desactivado en config.yaml")
+        return 0
+    notifier = LogNotifier() if (dry_run or sa.dry_run) else build_notifier(cfg)
+    store = SectorStore(sa.state_path).load()
+    rep = run_sector_alerts(sa, store, notifier)
+    chosen = [s["ticker"] for s in rep["signals"] if s.get("chosen")]
+    log.info("Rotación sectorial semana %s: %s", rep["week"], f"comprar {', '.join(chosen)}" if chosen else "sin señal")
+    if json_out:
+        Path(json_out).parent.mkdir(parents=True, exist_ok=True)
+        Path(json_out).write_text(json.dumps(rep, indent=2, ensure_ascii=False), encoding="utf-8")
+    return 0
+
+
 def cmd_etf_alert(cfg: AppConfig, dry_run: bool = False, force: bool = False, json_out: str | None = None) -> int:
     """Alerta diaria de reversión a la media en SPY y QQQ (antes del cierre de EE. UU.)."""
     import json
@@ -481,6 +503,9 @@ def main(argv: list[str] | None = None) -> int:
     ia = sub.add_parser("index-alert", help="informe semanal de barridas en S&P 500 y Nasdaq 100 por email")
     ia.add_argument("--dry-run", action="store_true", help="escribe el informe en el log en vez de enviarlo")
     ia.add_argument("--json", dest="json_out", help="guarda también el informe en este JSON")
+    sa = sub.add_parser("sector-alert", help="informe semanal de rotación sectorial en S&P 500 y Nasdaq 100 por email")
+    sa.add_argument("--dry-run", action="store_true", help="escribe el informe en el log en vez de enviarlo")
+    sa.add_argument("--json", dest="json_out", help="guarda también el informe en este JSON")
     ea = sub.add_parser("etf-alert", help="alerta diaria RSI(2) en SPY y QQQ antes del cierre de EE. UU.")
     ea.add_argument("--dry-run", action="store_true", help="escribe el aviso en el log en vez de enviarlo")
     ea.add_argument("--force", action="store_true", help="ignora la ventana horaria y los días ya procesados")
@@ -521,6 +546,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_indices(args.breadth, args.risk)
     if args.command == "index-alert":
         return cmd_index_alert(cfg, args.dry_run, args.json_out)
+    if args.command == "sector-alert":
+        return cmd_sector_alert(cfg, args.dry_run, args.json_out)
     if args.command == "etf-alert":
         return cmd_etf_alert(cfg, args.dry_run, args.force, args.json_out)
     if args.command == "weekly":

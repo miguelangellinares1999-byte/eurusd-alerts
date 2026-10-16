@@ -88,6 +88,27 @@ index_alerts:
     - {ticker: "^GSPC", name: "S&P 500", mt5: US500, contract_size: 1}
     - {ticker: "^NDX", name: "Nasdaq 100", mt5: NAS100, contract_size: 1}
 
+# Alerta semanal de rotación sectorial (sector_alerts.py, `python main.py sector-alert`).
+# Acciones de los sectores líderes (fuerza relativa de los ETFs SPDR frente a SPY, sobre su MM40)
+# con SPY alcista: dos semanas alcistas con FVG, barrida del último low semanal y cierre encima.
+# Backtest 2000-2026 (backtest/sector_rotation.py): ~11 %/año, DD ~35 %. Sábados en GitHub Actions
+# (.github/workflows/sector-alert.yml).
+sector_alerts:
+  enabled: true
+  dry_run: false           # true = el informe va al log en vez de por email
+  universe: ambos          # sp500, ndx (Nasdaq 100) o ambos
+  capital: 10000           # capital de la cuenta para calcular acciones (o variable SECTOR_CAPITAL)
+  risk_pct: 1              # % del capital arriesgado por operación
+  max_positions: 10        # posiciones abiertas a la vez como máximo
+  max_alloc_pct: 20        # nocional máximo por posición en % del capital (sin apalancamiento)
+  top: 4                   # sectores líderes en los que se buscan entradas
+  window: 10               # semanas tras el impulso con FVG en las que vale la barrida
+  tp_r: 3                  # objetivo en múltiplos del riesgo
+  min_risk_pct: 1          # se ignoran barridas con el SL a menos de este % de la entrada
+  lot_step: 1              # acciones mínimas por orden
+  weekly_summary: true     # email todas las semanas, aunque no haya señal
+  state_path: state/sector_alerts.json
+
 # Alerta diaria de reversión a la media en SPY y QQQ (etf_alerts.py, `python main.py etf-alert`).
 # RSI(2) < 10 sobre la MM200, salida al cerrar sobre la MM5 o a las 10 sesiones, stop 3 ATR.
 # Se ejecuta antes del cierre de EE. UU. para entrar al cierre (.github/workflows/etf-alert.yml).

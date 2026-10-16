@@ -184,6 +184,18 @@ Solo actúa entre las 15:00 y las 16:00 de Nueva York (`window`), una vez por d�
 
 En GitHub Actions (`.github/workflows/etf-alert.yml`) se lanza de lunes a viernes a las 15:30 de Nueva York (dos crons en UTC, uno para el horario de verano y otro para el de invierno; el que cae fuera de la ventana no hace nada) y guarda el estado en la caché. El capital puede venir de la variable `ETF_CAPITAL` del repositorio.
 
+## Alerta semanal de rotación sectorial (S&P 500 y Nasdaq 100)
+
+`python main.py sector-alert` aplica la estrategia de `backtest/sector_rotation.py` a las acciones del S&P 500 y del Nasdaq 100 (`universe`) con el cierre del viernes:
+
+- **Sectores líderes**: los `top` ETFs sectoriales SPDR con más fuerza relativa frente a SPY (13 y 26 semanas) que estén sobre su media de 40 semanas. Solo se opera si SPY también está sobre la suya.
+- **Entrada**: en acciones de esos sectores, dos semanas alcistas con FVG, y después una semana que barre el mínimo de la anterior y cierra por encima. Se compra al cierre del viernes, con el SL en el mínimo de esa semana y el TP a `tp_r` R (3R).
+- **Tamaño**: `risk_pct` % de riesgo por operación, como mucho `max_alloc_pct` % del capital por posición y `max_positions` abiertas. Si hay más señales que huecos libres, se eligen primero las de los sectores más fuertes.
+
+Manda un email cada sábado (con `weekly_summary: true`, aunque no haya señal) y sigue las operaciones avisadas hasta el SL o el TP en `state/sector_alerts.json`: la alerta da por hecho que ejecutas cada aviso. Las señales de semanas anteriores, cuya entrada ya pasó, salen solo como aviso. En la primera pasada se dan por avisadas sin email.
+
+En GitHub Actions (`.github/workflows/sector-alert.yml`) se lanza los sábados a las 08:30 UTC. El capital puede venir de la variable `SECTOR_CAPITAL` del repositorio.
+
 ## Bot MT5 para pruebas de fondeo en índices (IndexPropBot)
 
 `mt5/IndexPropBot.mq5` es un Expert Advisor con el perfil "equilibrado" de `backtest/index_prop_optimize.py` (pruebas de +10% / DD 10% / diario 5% sin límite de tiempo):

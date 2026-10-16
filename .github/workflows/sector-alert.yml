@@ -1,0 +1,61 @@
+name: Alerta semanal de rotación sectorial
+
+on:
+  schedule:
+    # Sábados 08:30 UTC: el cierre del viernes ya está en Yahoo.
+    - cron: "30 8 * * 6"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Solo log, sin email"
+        type: boolean
+        default: false
+
+concurrency:
+  group: sector-alert
+  cancel-in-progress: false
+
+jobs:
+  sector-alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+      ALERT_TO: ${{ secrets.ALERT_TO }}
+      SECTOR_CAPITAL: ${{ vars.SECTOR_CAPITAL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # Semanas ya avisadas y operaciones en seguimiento, guardadas entre ejecuciones.
+      - name: Restaurar estado
+        uses: actions/cache/restore@v4
+        with:
+          path: state/sector_alerts.json
+          key: sector-state-${{ github.run_id }}
+          restore-keys: sector-state-
+
+      - name: Ejecutar
+        run: python main.py sector-alert ${{ inputs.dry_run && '--dry-run' || '' }} --json report/sector_report.json
+
+      - name: Guardar informe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sector-report
+          path: report/sector_report.json
+          if-no-files-found: ignore
+
+      - name: Guardar estado
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state/sector_alerts.json
+          key: sector-state-${{ github.run_id }}-${{ github.run_attempt }}
